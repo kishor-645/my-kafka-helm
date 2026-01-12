@@ -27,7 +27,6 @@ subjects:
     name: {{ include "kafka.fullname" . }}
 
 ---
-# Headless service for internal discovery
 apiVersion: v1
 kind: Service
 metadata:
@@ -43,7 +42,6 @@ spec:
       port: 9093
 
 ---
-# External LoadBalancer Service
 apiVersion: v1
 kind: Service
 metadata:
@@ -81,25 +79,29 @@ spec:
             - sh
             - -c
             - |
-              # 1. Get Node ID from Pod Ordinal
               export KAFKA_NODE_ID=${HOSTNAME##*-}
               
-              # 2. Wait for LoadBalancer IP to be assigned
               echo "Waiting for LoadBalancer IP..."
               LB_IP=""
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              
+              # Loop until the External IP is available in the Service
               while [ -z "$LB_IP" ]; do
-                LB_IP=$(curl -sS --header "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
-                  --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                # Using wget and sed for maximum compatibility with minimal images
+                LB_IP=$(wget -qO- --header "Authorization: Bearer $TOKEN" \
+                  --no-check-certificate \
                   https://kubernetes.default.svc/api/v1/namespaces/{{ .Release.Namespace }}/services/{{ include "kafka.fullname" . }}-external \
-                  | grep -oP '(?<="ip": ")[^"]*' | head -n 1)
-                [ -z "$LB_IP" ] && sleep 5
+                  | sed 's/.*"ip": "\(.*\)".*/\1/' | cut -d'"' -f1)
+                
+                if [ -z "$LB_IP" ]; then
+                  echo "Still waiting for IP... (Make sure LoadBalancer is provisioning)"
+                  sleep 10
+                fi
               done
-              echo "External LB IP Found: $LB_IP"
-
-              # 3. Define Advertised Listeners
+              
+              echo "Found External IP: $LB_IP"
               export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:9094"
               
-              # 4. Start the official Kafka wrapper
               /etc/kafka/docker/run
           env:
             - name: KAFKA_PROCESS_ROLES

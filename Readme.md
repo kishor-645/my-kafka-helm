@@ -19,3 +19,18 @@ helm upgrade --install test-kafka ./my-kafka \
   --set storage.storageClass="longhorn" \
   --set clusterId="TEST7OEVBNTcwNTJENDM2BB"
 ```
+```bash
+helm upgrade --install k1 ./my-kafka -n k1 --create-namespace \
+  --set image.registry="docker.io" \
+  --set image.repository="apache/kafka" \
+  --set image.tag="4.1.1" \
+  --set kafka.replicas=3 \
+  --set kafka.storage.size=20Gi \
+  --set kafka.storage.className=longhorn \
+  --set kafka.replication.offsetsTopicReplicationFactor=3 \
+  --set kafka.replication.minInSyncReplicas=2 \
+  --set kafka.resources.requests.cpu=500m \
+  --set kafka.resources.requests.memory=1Gi \
+  --set kafka.resources.limits.cpu=1000m \
+  --set kafka.resources.limits.memory=2Gi
+```
