@@ -27,7 +27,7 @@ subjects:
     name: {{ include "kafka.fullname" . }}
 
 ---
-# Service for internal communication (Broker to Broker)
+# Internal Headless Discovery
 apiVersion: v1
 kind: Service
 metadata:
@@ -43,20 +43,26 @@ spec:
       port: 9093
 
 ---
-# Single LoadBalancer for Produce/Consume
+# Service mapping unique ports to specific Kafka pods
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "kafka.fullname" . }}-external
 spec:
   type: LoadBalancer
-  sessionAffinity: ClientIP  # Critical to avoid routing consumers to the wrong broker
   selector:
     app: {{ include "kafka.fullname" . }}
   ports:
-    - name: external
+    # We expose one port for each broker replica
+    - name: broker-0
       port: 9094
       targetPort: 9094
+    - name: broker-1
+      port: 9095
+      targetPort: 9095
+    - name: broker-2
+      port: 9096
+      targetPort: 9096
 
 ---
 apiVersion: apps/v1
@@ -77,7 +83,7 @@ spec:
       serviceAccountName: {{ include "kafka.fullname" . }}
       securityContext:
         fsGroup: 1000
-      
+
       initContainers:
         - name: init-permissions
           image: busybox:latest
@@ -97,8 +103,10 @@ spec:
             - -c
             - |
               export KAFKA_NODE_ID=${HOSTNAME##*-}
+              # Dynamically set listener port based on node ID (0->9094, 1->9095, 2->9096)
+              export EXT_PORT=$((9094 + KAFKA_NODE_ID))
               
-              echo "Locating LoadBalancer IP..."
+              echo "Detecting LoadBalancer IP..."
               TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
               LB_IP=""
               while [ -z "$LB_IP" ]; do
@@ -106,12 +114,9 @@ spec:
                 [ -z "$LB_IP" ] && sleep 5
               done
               
-              echo "Discovered LB IP: $LB_IP"
-              # Setup listeners: INTERNAL for pod-to-pod, EXTERNAL for outside-the-cluster
-              export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:9094"
-              
-              # Set this so Apache wrapper correctly formats the cluster
-              export CLUSTER_ID={{ .Values.kafka.clusterId | quote }}
+              export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:${EXT_PORT}"
+              export KAFKA_LISTENERS="INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:${EXT_PORT}"
+              export CLUSTER_ID="{{ .Values.kafka.clusterId }}"
               
               /etc/kafka/docker/run
           env:
@@ -121,8 +126,6 @@ spec:
               value: "broker,controller"
             - name: KAFKA_CONTROLLER_LISTENER_NAMES
               value: "CONTROLLER"
-            - name: KAFKA_LISTENERS
-              value: "INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094"
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
               value: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
             - name: KAFKA_INTER_BROKER_LISTENER_NAME
