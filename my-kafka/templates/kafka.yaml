@@ -85,17 +85,15 @@ spec:
               LB_IP=""
               TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
               
-              # Loop until the External IP is available in the Service
               while [ -z "$LB_IP" ]; do
-                # Using wget and sed for maximum compatibility with minimal images
+                # Improved: grabs anything that looks like an IP from the service JSON
                 LB_IP=$(wget -qO- --header "Authorization: Bearer $TOKEN" \
                   --no-check-certificate \
                   https://kubernetes.default.svc/api/v1/namespaces/{{ .Release.Namespace }}/services/{{ include "kafka.fullname" . }}-external \
-                  | sed 's/.*"ip": "\(.*\)".*/\1/' | cut -d'"' -f1)
+                  | grep -o '[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}' | head -n 1)
                 
                 if [ -z "$LB_IP" ]; then
-                  echo "Still waiting for IP... (Make sure LoadBalancer is provisioning)"
-                  sleep 10
+                  sleep 5
                 fi
               done
               
