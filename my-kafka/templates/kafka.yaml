@@ -48,8 +48,6 @@ metadata:
   name: {{ include "kafka.fullname" . }}-external
 spec:
   type: LoadBalancer
-  # This ensures the LB sends the request back to the SAME node 
-  # that requested the connection (session affinity).
   sessionAffinity: ClientIP
   selector:
     app: {{ include "kafka.fullname" . }}
@@ -75,9 +73,19 @@ spec:
         app: {{ include "kafka.fullname" . }}
     spec:
       serviceAccountName: {{ include "kafka.fullname" . }}
+      # Pod level security settings for UID 1000
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
       
-      # Fix system limits if your cluster allows it
       initContainers:
+        # Fix volume permissions before Kafka starts
+        - name: volume-permissions
+          image: busybox
+          command: ["sh", "-c", "chown -R 1000:1000 /var/lib/kafka/data"]
+          securityContext:
+            runAsUser: 0  # Needs root to change ownership
+        # Optional: system limit fix (if your k8s allows it)
         - name: fix-limits
           image: busybox
           command: ["sh", "-c", "sysctl -w fs.inotify.max_user_instances=1024 || true"]
@@ -106,9 +114,10 @@ spec:
               done
               
               echo "Found External IP: $LB_IP"
-              # ADVERTISED_LISTENERS must be unique per pod. For 3 pods 1 IP, 
-              # session affinity on the service is required to help consumption.
+              # Finalized listeners for 1-LB multi-node consumption fix
               export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:9094"
+              # Ensure the official wrapper sees the correct Cluster ID
+              export CLUSTER_ID={{ .Values.kafka.clusterId | quote }}
               
               /etc/kafka/docker/run
           env:
