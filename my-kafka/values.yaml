@@ -1,23 +1,24 @@
-replicaCount: 3
-image: apache/kafka:4.1.1
-clusterId: "MkU3OEVBNTcwNTJENDM2Qk"
+image:
+  registry: "docker.io"
+  repository: "apache/kafka"
+  tag: "4.1.1"
 
-storage:
-  size: 10Gi
-  storageClass: "standard"
-
-resources:
-  kafka:
+kafka:
+  replicas: 3
+  clusterId: "MkU3OEVBNTcwNTJENDM2Qk"
+  storage:
+    size: 20Gi
+    className: "standard"
+  replication:
+    offsetsTopicReplicationFactor: 3
+    minInSyncReplicas: 2
+  resources:
     requests:
-      cpu: 250m
-      memory: 512Mi
+      cpu: 500m
+      memory: 1Gi
     limits:
       cpu: 1000m
-      memory: 1Gi
-  ui:
-    requests:
-      cpu: 100m
-      memory: 256Mi
+      memory: 2Gi
 
 ui:
   enabled: true

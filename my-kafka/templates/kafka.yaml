@@ -1,4 +1,34 @@
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kafka.fullname" . }}
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kafka.fullname" . }}-lb-reader
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kafka.fullname" . }}-lb-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kafka.fullname" . }}-lb-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kafka.fullname" . }}
+
+---
+# Headless service for internal discovery
+apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "kafka.fullname" . }}-headless
@@ -13,17 +43,19 @@ spec:
       port: 9093
 
 ---
+# External LoadBalancer Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "kafka.fullname" . }}
+  name: {{ include "kafka.fullname" . }}-external
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app: {{ include "kafka.fullname" . }}
   ports:
-    - name: client
-      port: 9092
+    - name: external
+      port: 9094
+      targetPort: 9094
 
 ---
 apiVersion: apps/v1
@@ -32,7 +64,7 @@ metadata:
   name: {{ include "kafka.fullname" . }}
 spec:
   serviceName: {{ include "kafka.fullname" . }}-headless
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.kafka.replicas }}
   selector:
     matchLabels:
       app: {{ include "kafka.fullname" . }}
@@ -41,16 +73,33 @@ spec:
       labels:
         app: {{ include "kafka.fullname" . }}
     spec:
+      serviceAccountName: {{ include "kafka.fullname" . }}
       containers:
         - name: kafka
-          image: {{ .Values.image }}
-          # We use a shell command to extract the integer from the Pod name (gai-0 -> 0)
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           command:
             - sh
             - -c
             - |
+              # 1. Get Node ID from Pod Ordinal
               export KAFKA_NODE_ID=${HOSTNAME##*-}
-              export KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092"
+              
+              # 2. Wait for LoadBalancer IP to be assigned
+              echo "Waiting for LoadBalancer IP..."
+              LB_IP=""
+              while [ -z "$LB_IP" ]; do
+                LB_IP=$(curl -sS --header "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+                  --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                  https://kubernetes.default.svc/api/v1/namespaces/{{ .Release.Namespace }}/services/{{ include "kafka.fullname" . }}-external \
+                  | grep -oP '(?<="ip": ")[^"]*' | head -n 1)
+                [ -z "$LB_IP" ] && sleep 5
+              done
+              echo "External LB IP Found: $LB_IP"
+
+              # 3. Define Advertised Listeners
+              export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:9094"
+              
+              # 4. Start the official Kafka wrapper
               /etc/kafka/docker/run
           env:
             - name: KAFKA_PROCESS_ROLES
@@ -58,22 +107,23 @@ spec:
             - name: KAFKA_CONTROLLER_LISTENER_NAMES
               value: "CONTROLLER"
             - name: KAFKA_LISTENERS
-              value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+              value: "INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094"
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
-              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+              value: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "INTERNAL"
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-              value: {{ range $i, $e := until (int .Values.replicaCount) }}{{ if $i }},{{ end }}{{ $i }}@{{ $.Release.Name }}-kafka-{{ $i }}.{{ $.Release.Name }}-kafka-headless:9093{{ end }}
+              value: {{ range $i, $e := until (int .Values.kafka.replicas) }}{{ if $i }},{{ end }}{{ $i }}@{{ $.Release.Name }}-kafka-{{ $i }}.{{ $.Release.Name }}-kafka-headless:9093{{ end }}
             - name: KAFKA_CLUSTER_ID
-              value: {{ .Values.clusterId | quote }}
-            # Set internal replication to match cluster size
+              value: {{ .Values.kafka.clusterId | quote }}
             - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
-              value: {{ .Values.replicaCount | quote }}
+              value: {{ .Values.kafka.replication.offsetsTopicReplicationFactor | quote }}
             - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
-              value: {{ .Values.replicaCount | quote }}
-            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
-              value: "1"
+              value: {{ .Values.kafka.replication.offsetsTopicReplicationFactor | quote }}
+            - name: KAFKA_MIN_INSYNC_REPLICAS
+              value: {{ .Values.kafka.replication.minInSyncReplicas | quote }}
           resources:
-            {{- toYaml .Values.resources.kafka | nindent 12 }}
+            {{- toYaml .Values.kafka.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/kafka/data
@@ -82,7 +132,7 @@ spec:
         name: data
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ .Values.storage.storageClass }}
+        storageClassName: {{ .Values.kafka.storage.className }}
         resources:
           requests:
-            storage: {{ .Values.storage.size }}
+            storage: {{ .Values.kafka.storage.size }}
