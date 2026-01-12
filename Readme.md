@@ -7,7 +7,7 @@ Since you want to deploy multiple times with overrides, use the following:
 helm upgrade --install gai-kafka ./my-kafka \
   --set replicaCount=3 \
   --set storage.size=5Gi \
-  --set storage.storageClass="longhorn"
+  --set storage.storageClass="longhorn" \
   --set clusterId="MkU3OEVBNTcwNTJENDM2Qk"
 ```
 
@@ -16,6 +16,6 @@ helm upgrade --install gai-kafka ./my-kafka \
 helm upgrade --install test-kafka ./my-kafka \
   --set replicaCount=1 \
   --set storage.size=1Gi \
-  --set storage.storageClass="longhorn"
+  --set storage.storageClass="longhorn" \
   --set clusterId="TEST7OEVBNTcwNTJENDM2BB"
 ```
