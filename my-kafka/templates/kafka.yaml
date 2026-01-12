@@ -27,6 +27,7 @@ subjects:
     name: {{ include "kafka.fullname" . }}
 
 ---
+# Service for internal communication (Broker to Broker)
 apiVersion: v1
 kind: Service
 metadata:
@@ -42,13 +43,14 @@ spec:
       port: 9093
 
 ---
+# Single LoadBalancer for Produce/Consume
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "kafka.fullname" . }}-external
 spec:
   type: LoadBalancer
-  sessionAffinity: ClientIP
+  sessionAffinity: ClientIP  # Critical to avoid routing consumers to the wrong broker
   selector:
     app: {{ include "kafka.fullname" . }}
   ports:
@@ -75,9 +77,7 @@ spec:
       serviceAccountName: {{ include "kafka.fullname" . }}
       securityContext:
         fsGroup: 1000
-        runAsUser: 1000
-        runAsNonRoot: true
-
+      
       initContainers:
         - name: init-permissions
           image: busybox:latest
@@ -98,7 +98,7 @@ spec:
             - |
               export KAFKA_NODE_ID=${HOSTNAME##*-}
               
-              echo "Getting LB IP..."
+              echo "Locating LoadBalancer IP..."
               TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
               LB_IP=""
               while [ -z "$LB_IP" ]; do
@@ -106,15 +106,17 @@ spec:
                 [ -z "$LB_IP" ] && sleep 5
               done
               
-              echo "IP found: $LB_IP"
+              echo "Discovered LB IP: $LB_IP"
+              # Setup listeners: INTERNAL for pod-to-pod, EXTERNAL for outside-the-cluster
               export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:9094"
-              export CLUSTER_ID="{{ .Values.kafka.clusterId }}"
+              
+              # Set this so Apache wrapper correctly formats the cluster
+              export CLUSTER_ID={{ .Values.kafka.clusterId | quote }}
               
               /etc/kafka/docker/run
           env:
-            # We use a subfolder in the volume for logs to avoid access issues with the root of the mount
             - name: KAFKA_LOG_DIRS
-              value: "/var/lib/kafka/data/kraft-logs"
+              value: "/var/lib/kafka/data/logs"
             - name: KAFKA_PROCESS_ROLES
               value: "broker,controller"
             - name: KAFKA_CONTROLLER_LISTENER_NAMES
