@@ -48,7 +48,7 @@ metadata:
   name: {{ include "kafka.fullname" . }}-external
 spec:
   type: LoadBalancer
-  sessionAffinity: ClientIP
+  sessionAffinity: ClientIP  # Critical for 3 brokers on 1 LB IP
   selector:
     app: {{ include "kafka.fullname" . }}
   ports:
@@ -73,28 +73,37 @@ spec:
         app: {{ include "kafka.fullname" . }}
     spec:
       serviceAccountName: {{ include "kafka.fullname" . }}
-      # Pod level security settings for UID 1000
+      
+      # Security context to assist with volume permissions
       securityContext:
         fsGroup: 1000
-        runAsUser: 1000
-      
+
       initContainers:
-        # Fix volume permissions before Kafka starts
-        - name: volume-permissions
-          image: busybox
-          command: ["sh", "-c", "chown -R 1000:1000 /var/lib/kafka/data"]
+        - name: init-setup
+          image: busybox:latest
+          # 1. Fix Permissions for user 1000
+          # 2. Fix sysctl limits for Kafka
+          command: 
+            - sh
+            - -c
+            - |
+              echo "Fixing permissions..."
+              chown -R 1000:1000 /var/lib/kafka/data
+              echo "Fixing limits..."
+              sysctl -w fs.inotify.max_user_instances=1024 || true
           securityContext:
-            runAsUser: 0  # Needs root to change ownership
-        # Optional: system limit fix (if your k8s allows it)
-        - name: fix-limits
-          image: busybox
-          command: ["sh", "-c", "sysctl -w fs.inotify.max_user_instances=1024 || true"]
-          securityContext:
+            runAsUser: 0
             privileged: true
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
 
       containers:
         - name: kafka
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          # Explicitly running as 1000
+          securityContext:
+            runAsUser: 1000
           command:
             - sh
             - -c
@@ -114,13 +123,14 @@ spec:
               done
               
               echo "Found External IP: $LB_IP"
-              # Finalized listeners for 1-LB multi-node consumption fix
               export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:9094"
-              # Ensure the official wrapper sees the correct Cluster ID
-              export CLUSTER_ID={{ .Values.kafka.clusterId | quote }}
               
+              # Standard Apache Image entrypoint script
               /etc/kafka/docker/run
           env:
+            # Setting CLUSTER_ID specifically (Apache wrapper expects this name)
+            - name: CLUSTER_ID
+              value: {{ .Values.kafka.clusterId | quote }}
             - name: KAFKA_LOG_DIRS
               value: "/var/lib/kafka/data"
             - name: KAFKA_PROCESS_ROLES
@@ -135,8 +145,6 @@ spec:
               value: "INTERNAL"
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
               value: {{ range $i, $e := until (int .Values.kafka.replicas) }}{{ if $i }},{{ end }}{{ $i }}@{{ $.Release.Name }}-kafka-{{ $i }}.{{ $.Release.Name }}-kafka-headless:9093{{ end }}
-            - name: KAFKA_CLUSTER_ID
-              value: {{ .Values.kafka.clusterId | quote }}
             - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
               value: {{ .Values.kafka.replication.offsetsTopicReplicationFactor | quote }}
             - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
