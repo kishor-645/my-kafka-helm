@@ -4,7 +4,7 @@ Since you want to deploy multiple times with overrides, use the following:
 
 
 ```bash
-helm upgrade --install kfk . -n kfk --create-namespace \
+helm upgrade --install kfk ./my-kafka -n kfk --create-namespace \
   --set image.registry="docker.io" \
   --set image.repository="apache/kafka" \
   --set image.tag="4.1.1" \
@@ -20,8 +20,9 @@ helm upgrade --install kfk . -n kfk --create-namespace \
 
 
 ```bash
-helm upgrade --install kfk . -n kfk --create-namespace \
+helm upgrade --install kfk ./my-kafka -n kfk --create-namespace \
   --set kafka.storage.size=50Gi \
+  --set kafka.staticIP="10.227.252.40" \
   --set kafka.storage.className=longhorn \
   --set kafka.resources.requests.cpu=1000m \
   --set kafka.resources.requests.memory=2Gi \
