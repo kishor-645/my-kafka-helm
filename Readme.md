@@ -22,7 +22,6 @@ helm upgrade --install kfk ./my-kafka -n kfk --create-namespace \
 ```bash
 helm upgrade --install kfk ./my-kafka -n kfk --create-namespace \
   --set kafka.storage.size=50Gi \
-  --set kafka.staticIP="10.227.252.40" \
   --set kafka.storage.className=longhorn \
   --set kafka.resources.requests.cpu=1000m \
   --set kafka.resources.requests.memory=2Gi \

@@ -31,7 +31,6 @@ metadata:
 spec:
   # Internal Port 9092, External Port 9094
   type: LoadBalancer
-  loadBalancerIP: {{ .Values.kafka.staticIP | quote }}
   selector:
     app: {{ include "kafka.fullname" . }}
   ports:
