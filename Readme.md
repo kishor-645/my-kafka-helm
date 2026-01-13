@@ -2,6 +2,44 @@
 
 Since you want to deploy multiple times with overrides, use the following:
 
+
+```bash
+helm upgrade --install kfk . -n kfk --create-namespace \
+  --set image.registry="docker.io" \
+  --set image.repository="apache/kafka" \
+  --set image.tag="4.1.1" \
+  --set kafka.storage.size=50Gi \
+  --set kafka.storage.className=longhorn \
+  --set kafka.resources.requests.cpu=1000m \
+  --set kafka.resources.requests.memory=2Gi \
+  --set kafka.resources.limits.cpu=4000m \
+  --set kafka.resources.limits.memory=6Gi
+
+```
+
+
+
+```bash
+helm upgrade --install kfk . -n kfk --create-namespace \
+  --set kafka.storage.size=50Gi \
+  --set kafka.storage.className=longhorn \
+  --set kafka.resources.requests.cpu=1000m \
+  --set kafka.resources.requests.memory=2Gi \
+  --set kafka.resources.limits.cpu=4000m \
+  --set kafka.resources.limits.memory=6Gi
+
+```
+
+
+
+
+
+
+
+old code config----
+
+
+
 **Deploy Instance 1 (gai-kafka):**
 ```bash
 helm upgrade --install gai-kafka ./my-kafka \

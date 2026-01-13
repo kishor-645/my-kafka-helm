@@ -2,7 +2,6 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ include "kafka.fullname" . }}
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -12,7 +11,6 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get"]
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -25,53 +23,31 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: {{ include "kafka.fullname" . }}
-
 ---
-# Internal Headless Discovery
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "kafka.fullname" . }}-headless
+  name: {{ include "kafka.fullname" . }}
 spec:
-  clusterIP: None
-  selector:
-    app: {{ include "kafka.fullname" . }}
-  ports:
-    - name: client
-      port: 9092
-    - name: controller
-      port: 9093
-
----
-# Service mapping unique ports to specific Kafka pods
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "kafka.fullname" . }}-external
-spec:
+  # Internal Port 9092, External Port 9094
   type: LoadBalancer
   selector:
     app: {{ include "kafka.fullname" . }}
   ports:
-    # We expose one port for each broker replica
-    - name: broker-0
+    - name: internal
+      port: 9092
+      targetPort: 9092
+    - name: external
       port: 9094
       targetPort: 9094
-    - name: broker-1
-      port: 9095
-      targetPort: 9095
-    - name: broker-2
-      port: 9096
-      targetPort: 9096
-
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: {{ include "kafka.fullname" . }}
 spec:
-  serviceName: {{ include "kafka.fullname" . }}-headless
-  replicas: {{ .Values.kafka.replicas }}
+  serviceName: {{ include "kafka.fullname" . }}
+  replicas: 1
   selector:
     matchLabels:
       app: {{ include "kafka.fullname" . }}
@@ -83,7 +59,6 @@ spec:
       serviceAccountName: {{ include "kafka.fullname" . }}
       securityContext:
         fsGroup: 1000
-
       initContainers:
         - name: init-permissions
           image: busybox:latest
@@ -93,51 +68,49 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/kafka/data
-
       containers:
         - name: kafka
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 1000
           command:
             - sh
             - -c
             - |
-              export KAFKA_NODE_ID=${HOSTNAME##*-}
-              # Dynamically set listener port based on node ID (0->9094, 1->9095, 2->9096)
-              export EXT_PORT=$((9094 + KAFKA_NODE_ID))
-              
-              echo "Detecting LoadBalancer IP..."
+              echo "Waiting for LoadBalancer IP..."
               TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
               LB_IP=""
               while [ -z "$LB_IP" ]; do
-                LB_IP=$(wget -qO- --header "Authorization: Bearer $TOKEN" --no-check-certificate https://kubernetes.default.svc/api/v1/namespaces/{{ .Release.Namespace }}/services/{{ include "kafka.fullname" . }}-external | grep -o '[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}' | head -n 1)
+                LB_IP=$(wget -qO- --header "Authorization: Bearer $TOKEN" --no-check-certificate https://kubernetes.default.svc/api/v1/namespaces/{{ .Release.Namespace }}/services/{{ include "kafka.fullname" . }} | grep -o '[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}' | head -n 1)
                 [ -z "$LB_IP" ] && sleep 5
               done
               
-              export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${HOSTNAME}.{{ include "kafka.fullname" . }}-headless:9092,EXTERNAL://${LB_IP}:${EXT_PORT}"
-              export KAFKA_LISTENERS="INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:${EXT_PORT}"
-              export CLUSTER_ID="{{ .Values.kafka.clusterId }}"
-              
+              echo "Discovered LB IP: $LB_IP"
+              export KAFKA_ADVERTISED_LISTENERS="INTERNAL://{{ include "kafka.fullname" . }}:9092,EXTERNAL://${LB_IP}:9094"
               /etc/kafka/docker/run
           env:
-            - name: KAFKA_LOG_DIRS
-              value: "/var/lib/kafka/data/logs"
+            - name: CLUSTER_ID
+              value: {{ .Values.kafka.clusterId | quote }}
+            - name: KAFKA_NODE_ID
+              value: "1"
             - name: KAFKA_PROCESS_ROLES
               value: "broker,controller"
             - name: KAFKA_CONTROLLER_LISTENER_NAMES
               value: "CONTROLLER"
+            - name: KAFKA_LISTENERS
+              value: "INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094"
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
               value: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
             - name: KAFKA_INTER_BROKER_LISTENER_NAME
               value: "INTERNAL"
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-              value: {{ range $i, $e := until (int .Values.kafka.replicas) }}{{ if $i }},{{ end }}{{ $i }}@{{ $.Release.Name }}-kafka-{{ $i }}.{{ $.Release.Name }}-kafka-headless:9093{{ end }}
+              value: "1@localhost:9093"
             - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
-              value: {{ .Values.kafka.replication.offsetsTopicReplicationFactor | quote }}
+              value: "1"
             - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
-              value: {{ .Values.kafka.replication.offsetsTopicReplicationFactor | quote }}
-            - name: KAFKA_MIN_INSYNC_REPLICAS
-              value: {{ .Values.kafka.replication.minInSyncReplicas | quote }}
+              value: "1"
+            - name: KAFKA_LOG_DIRS
+              value: "/var/lib/kafka/data/logs"
           resources:
             {{- toYaml .Values.kafka.resources | nindent 12 }}
           volumeMounts:
